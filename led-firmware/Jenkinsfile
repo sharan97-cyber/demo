@@ -1,4 +1,5 @@
-// Agent linux-agent
+@Library('shared_library@main') _
+
 pipeline {
     agent { label 'linux-agent' }
     options {
@@ -7,75 +8,19 @@ pipeline {
     environment {
         BUILD_DIR = 'build'
         PROJECT_DIR = 'led-firmware'
-        SHARED_REPO_URL = 'https://github.com/sandeepds077/shared_library.git'
-        SHARED_REPO_DIR = '/tmp/led-shared'
     }
     stages {
         stage('Checkout') {
-            steps { checkout scm }
+            steps {
+                checkout scm
+            }
         }
 
         stage('Prepare') {
             steps {
                 script {
-                    // Try to use a global shared library named 'led-shared' (branch 'main')
-                    def usedShared = false
-                    try {
-                        library 'led-shared@main'
-                        if (this.metaClass.respondsTo(this, 'prepareEnvironment')) {
-                            echo 'Using shared library: led-shared.prepareEnvironment()'
-                            prepareEnvironment(env.PROJECT_DIR)
-                            usedShared = true
-                        } else {
-                            echo 'Shared library loaded but prepareEnvironment() not found.'
-                        }
-                    } catch (err) {
-                        echo "Shared library not available or failed to load: ${err}"
-                    }
-
-                    // If shared library was loaded, set flag for other stages
-                    if (usedShared) {
-                        env.USE_SHARED = 'true'
-                    } else {
-                        env.USE_SHARED = 'false'
-                    }
-
-                    if (!usedShared) {
-                        sh '''
-                        set -e
-                        if [ -d "${SHARED_REPO_DIR}" ]; then
-                          echo "Shared repo already cloned"
-                        else
-                          rm -rf "${SHARED_REPO_DIR}"
-                          git clone "${SHARED_REPO_URL}" "${SHARED_REPO_DIR}" || true
-                        fi
-
-                        if [ -x "${SHARED_REPO_DIR}/scripts/prepare.sh" ]; then
-                          echo "Running shared library prepare.sh fallback"
-                          sh "${SHARED_REPO_DIR}/scripts/prepare.sh"
-                        else
-                          echo "Shared library fallback script not found; using inline installation"
-                          NEED_INSTALL=0
-                          for cmd in cmake clang-format arm-none-eabi-gcc arm-none-eabi-objcopy; do
-                              if ! command -v "$cmd" >/dev/null 2>&1; then
-                                  NEED_INSTALL=1
-                              fi
-                          done
-
-                          if [ "$NEED_INSTALL" -eq 1 ]; then
-                              if command -v sudo >/dev/null 2>&1; then
-                                  sudo apt-get update
-                                  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake clang-format gcc-arm-none-eabi binutils-arm-none-eabi build-essential || true
-                              else
-                                  apt-get update || true
-                                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake clang-format gcc-arm-none-eabi binutils-arm-none-eabi build-essential || true
-                              fi
-                          else
-                              echo "Required tools already installed"
-                          fi
-                        fi
-                        '''
-                    }
+                    echo 'Using shared library: prepareEnvironment()'
+                    prepareEnvironment(env.PROJECT_DIR)
                 }
             }
         }
@@ -83,52 +28,8 @@ pipeline {
         stage('Lint') {
             steps {
                 script {
-                    if (env.USE_SHARED == 'true' && this.metaClass.respondsTo(this, 'runClangFormat')) {
-                        echo 'Using shared library runClangFormat()'
-                        runClangFormat(env.PROJECT_DIR, env.BUILD_DIR)
-                    } else if (env.USE_SHARED == 'true') {
-                        echo 'Shared library loaded but runClangFormat() not found; falling back to shared repo script if available'
-                        sh '''
-                        if [ -x "${SHARED_REPO_DIR}/scripts/clang-format-check.sh" ]; then
-                          echo "Running shared library script fallback for lint"
-                          cd ${PROJECT_DIR}
-                          sh "${SHARED_REPO_DIR}/scripts/clang-format-check.sh ${BUILD_DIR}"
-                        else
-                          echo "Shared library script not found; falling back to inline lint"
-                          REPORT_DIR=${PROJECT_DIR}/${BUILD_DIR}
-                          mkdir -p "$REPORT_DIR"
-                          REPORT="$REPORT_DIR/clang-format-report.txt"
-                          echo "Clang-format report generated at: $REPORT" > "$REPORT"
-                          if command -v clang-format >/dev/null 2>&1; then
-                            find ${PROJECT_DIR}/src ${PROJECT_DIR}/include -type f -name "*.c" -print0 | xargs -0 --no-run-if-empty clang-format --dry-run --Werror >> "$REPORT" || true
-                            find ${PROJECT_DIR}/src ${PROJECT_DIR}/include -type f -name "*.h" -print0 | xargs -0 --no-run-if-empty clang-format --dry-run --Werror >> "$REPORT" || true
-                          else
-                            echo "clang-format not found; skipping lint" >> "$REPORT"
-                          fi
-                          tail -n +1 "$REPORT" || true
-                        fi
-                        '''
-                    } else {
-                        // No shared lib used; run inline lint
-                        sh '''
-                        set +e
-                        REPORT_DIR=${PROJECT_DIR}/${BUILD_DIR}
-                        mkdir -p "$REPORT_DIR"
-                        REPORT="$REPORT_DIR/clang-format-report.txt"
-                        echo "Clang-format report generated at: $REPORT" > "$REPORT"
-
-                        if command -v clang-format >/dev/null 2>&1; then
-                            find ${PROJECT_DIR}/src ${PROJECT_DIR}/include -type f -name "*.c" -print0 | xargs -0 --no-run-if-empty sh -c 'clang-format --dry-run --Werror "$@" 2>&1' sh >> "$REPORT" || true
-                            find ${PROJECT_DIR}/src ${PROJECT_DIR}/include -type f -name "*.h" -print0 | xargs -0 --no-run-if-empty sh -c 'clang-format --dry-run --Werror "$@" 2>&1' sh >> "$REPORT" || true
-                        else
-                            echo "clang-format not found; skipping lint" >> "$REPORT"
-                        fi
-
-                        echo "--- clang-format summary ---"
-                        tail -n +1 "$REPORT" || true
-                        exit 0
-                        '''
-                    }
+                    echo 'Using shared library: runClangFormat()'
+                    runClangFormat(env.PROJECT_DIR, env.BUILD_DIR)
                 }
             }
         }
@@ -146,25 +47,8 @@ pipeline {
         stage('Build') {
             steps {
                 script {
-                    if (env.USE_SHARED == 'true' && this.metaClass.respondsTo(this, 'buildFirmware')) {
-                        echo 'Using shared library buildFirmware()'
-                        buildFirmware(env.PROJECT_DIR, env.BUILD_DIR)
-                    } else if (env.USE_SHARED == 'false') {
-                        sh '''
-                        if [ -x "${SHARED_REPO_DIR}/scripts/build.sh" ]; then
-                          echo "Using shared library git-fallback build script"
-                          sh "${SHARED_REPO_DIR}/scripts/build.sh ${PROJECT_DIR} ${BUILD_DIR}"
-                        else
-                          cd ${PROJECT_DIR}/${BUILD_DIR}
-                          cmake --build .
-                        fi
-                        '''
-                    } else {
-                        sh '''
-                        cd ${PROJECT_DIR}/${BUILD_DIR}
-                        cmake --build .
-                        '''
-                    }
+                    echo 'Using shared library: buildFirmware()'
+                    buildFirmware(env.PROJECT_DIR, env.BUILD_DIR)
                 }
             }
         }
