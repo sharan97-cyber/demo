@@ -5,10 +5,14 @@ library identifier: 'shared_library@main', retriever: modernSCM(
 )
 
 pipeline {
-    agent { label 'linux-agent' }
+    agent { 
+        label 'linux-agent'
+        retries(1)  // ✅ Retry once if checkout fails
+    }
     options {
         timestamps()
         timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
     environment {
         BUILD_DIR = 'build'
@@ -18,13 +22,13 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'echo "Checkout completed successfully"'
+                sh 'echo "✅ Checkout completed successfully"'
             }
         }
         stage('Prepare') {
             steps {
                 script {
-                    echo 'Using shared library: prepareEnvironment()'
+                    echo '========== Prepare Environment =========='
                     prepareEnvironment(env.PROJECT_DIR)
                 }
             }
@@ -32,7 +36,7 @@ pipeline {
         stage('Lint') {
             steps {
                 script {
-                    echo 'Using shared library: runClangFormat()'
+                    echo '========== Code Formatting Check =========='
                     runClangFormat(env.PROJECT_DIR, env.BUILD_DIR)
                 }
             }
@@ -50,9 +54,9 @@ pipeline {
                             if [ -f tests/led_test.c ] && [ -f src/led.c ]; then
                                 cc -std=c99 -Wall -Wextra -Iinclude tests/led_test.c src/led.c -o "${BUILD_DIR}/led_test"
                                 "${BUILD_DIR}/led_test"
-                                echo "========== Unit Tests Passed =========="
+                                echo "✅ Unit Tests Passed"
                             else
-                                echo "Test files not found, skipping unit tests"
+                                echo "⚠️  Test files not found, skipping unit tests"
                             fi
                             '''
                         }
@@ -68,11 +72,11 @@ pipeline {
                             mkdir -p "${BUILD_DIR}"
                             
                             if [ -f src/led.c ]; then
-                                # Check for potential issues using gcc warnings
+                                echo "Analyzing src/led.c with strict compiler warnings..."
                                 cc -std=c99 -Wall -Wextra -Wconversion -Wsign-conversion -Wunused -Iinclude -c src/led.c -o "${BUILD_DIR}/led.o" 2>&1 || true
-                                echo "========== Static Analysis Complete =========="
+                                echo "✅ Static Analysis Complete"
                             else
-                                echo "Source files not found, skipping static analysis"
+                                echo "⚠️  Source files not found, skipping static analysis"
                             fi
                             '''
                         }
@@ -86,16 +90,20 @@ pipeline {
                 dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
                     sh '''
                     set -e
+                    echo "========== CMake Configuration =========="
                     mkdir -p "${BUILD_DIR}"
                     cd "${BUILD_DIR}"
                     if [ -f ../CMakeLists.txt ]; then
                         if [ -f ../arm-gcc-toolchain.cmake ]; then
+                            echo "Using ARM GCC toolchain..."
                             cmake .. -DCMAKE_TOOLCHAIN_FILE=../arm-gcc-toolchain.cmake
                         else
+                            echo "Using default toolchain..."
                             cmake ..
                         fi
+                        echo "✅ CMake Configuration Complete"
                     else
-                        echo "CMakeLists.txt not found"
+                        echo "⚠️  CMakeLists.txt not found, skipping configure"
                     fi
                     '''
                 }
@@ -104,7 +112,7 @@ pipeline {
         stage('Build') {
             steps {
                 script {
-                    echo 'Using shared library: buildFirmware()'
+                    echo '========== Building Firmware =========='
                     buildFirmware(env.PROJECT_DIR, env.BUILD_DIR)
                 }
             }
@@ -112,9 +120,13 @@ pipeline {
         stage('Verify Artifacts') {
             steps {
                 sh '''
-                echo "========== Verifying Artifacts =========="
-                ls -lh ${PROJECT_DIR}/${BUILD_DIR} || echo "Build directory not found"
-                echo "========== Artifact Verification Complete =========="
+                echo "========== Verifying Build Artifacts =========="
+                if [ -d ${PROJECT_DIR}/${BUILD_DIR} ]; then
+                    ls -lh ${PROJECT_DIR}/${BUILD_DIR}
+                    echo "✅ Build artifacts verified"
+                else
+                    echo "⚠️  Build directory not found"
+                fi
                 '''
             }
         }
@@ -123,9 +135,8 @@ pipeline {
         always {
             node('linux-agent') {
                 script {
+                    echo '========== Post-Build: Archiving Artifacts =========='
                     try {
-                        echo '========== Post-Build: Archiving Reports =========='
-                        
                         // Archive clang-format report
                         archiveArtifacts artifacts: "${env.PROJECT_DIR}/${env.BUILD_DIR}/clang-format-report.txt", 
                                        allowEmptyArchive: true
@@ -137,25 +148,28 @@ pipeline {
                         // Print clang-format report if exists
                         sh '''
                         if [ -f ${PROJECT_DIR}/${BUILD_DIR}/clang-format-report.txt ]; then
-                            echo "--- clang-format report ---"
+                            echo "--- Clang Format Report ---"
                             cat ${PROJECT_DIR}/${BUILD_DIR}/clang-format-report.txt
                         else
-                            echo "No clang-format report found"
+                            echo "No clang-format report generated"
                         fi
                         '''
                         
-                        echo '========== Post-Build: Complete =========='
+                        echo '========== Post-Build: Archive Complete =========='
                     } catch (Exception e) {
-                        echo "Post-build step failed: ${e.message}"
+                        echo "⚠️  Post-build archiving failed: ${e.message}"
                     }
                 }
             }
         }
         success {
-            echo '✅ Build succeeded.'
+            echo '✅ BUILD SUCCEEDED - All stages completed successfully'
         }
         failure {
-            echo '❌ Build failed.'
+            echo '❌ BUILD FAILED - Check console output above for details'
+        }
+        unstable {
+            echo '⚠️  BUILD UNSTABLE - Some warnings detected'
         }
     }
 }
