@@ -5,19 +5,19 @@ library identifier: 'shared_library@main', retriever: modernSCM(
 )
 
 pipeline {
-    agent { 
-        label 'linux-agent'
-        retries(1)  // ✅ Retry once if checkout fails
-    }
+    agent { label 'linux-agent' }
+    
     options {
         timestamps()
         timeout(time: 30, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
+    
     environment {
         BUILD_DIR = 'build'
         PROJECT_DIR = 'led-firmware'
     }
+    
     stages {
         stage('Checkout') {
             steps {
@@ -25,6 +25,7 @@ pipeline {
                 sh 'echo "✅ Checkout completed successfully"'
             }
         }
+        
         stage('Prepare') {
             steps {
                 script {
@@ -33,6 +34,7 @@ pipeline {
                 }
             }
         }
+        
         stage('Lint') {
             steps {
                 script {
@@ -109,6 +111,7 @@ pipeline {
                 }
             }
         }
+        
         stage('Build') {
             steps {
                 script {
@@ -117,6 +120,7 @@ pipeline {
                 }
             }
         }
+        
         stage('Verify Artifacts') {
             steps {
                 sh '''
@@ -131,6 +135,7 @@ pipeline {
             }
         }
     }
+    
     post {
         always {
             node('linux-agent') {
