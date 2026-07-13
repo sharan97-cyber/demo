@@ -1,0 +1,122 @@
+library identifier: 'shared_library@main', retriever: modernSCM(
+    [$class: 'GitSCMSource',
+     remote: 'https://github.com/sharan97-cyber/shared_library.git',
+     traits: [[$class: 'CloneOptionTrait', noTags: false, shallow: false]]]
+)
+pipeline {
+    agent { label 'linux-agent' }
+    options {
+        timestamps()
+    }
+    environment {
+        BUILD_DIR = 'build'
+        PROJECT_DIR = 'led-firmware'
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Prepare') {
+            steps {
+                script {
+                    echo 'Using shared library: prepareEnvironment()'
+                    prepareEnvironment(env.PROJECT_DIR)
+                }
+            }
+        }
+        stage('Lint') {
+            steps {
+                script {
+                    echo 'Using shared library: runClangFormat()'
+                    runClangFormat(env.PROJECT_DIR, env.BUILD_DIR)
+                }
+            }
+        }
+        
+        stage('Parallel Validation') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
+                            sh '''
+                            set -e
+                            mkdir -p "${BUILD_DIR}"
+                            echo "========== Running Unit Tests =========="
+                            cc -std=c99 -Wall -Wextra -Iinclude tests/led_test.c src/led.c -o "${BUILD_DIR}/led_test"
+                            "${BUILD_DIR}/led_test"
+                            echo "========== Unit Tests Passed =========="
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Static Analysis') {
+                    steps {
+                        dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
+                            sh '''
+                            set -e
+                            echo "========== Running Static Analysis =========="
+                            mkdir -p "${BUILD_DIR}"
+                            
+                            # Check for potential issues using gcc warnings
+                            cc -std=c99 -Wall -Wextra -Wconversion -Wsign-conversion -Wunused -Iinclude -c src/led.c -o "${BUILD_DIR}/led.o" || true
+                            
+                            # Count warnings
+                            WARNINGS=$(cc -std=c99 -Wall -Wextra -Wconversion -Wsign-conversion -Wunused -Iinclude -c src/led.c -o "${BUILD_DIR}/led.o" 2>&1 | grep -c "warning:" || true)
+                            echo "Found $WARNINGS warnings"
+                            
+                            echo "========== Static Analysis Complete =========="
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Configure') {
+            steps {
+                dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
+                    sh '''
+                    set -e
+                    mkdir -p "${BUILD_DIR}"
+                    cd "${BUILD_DIR}"
+                    cmake .. -DCMAKE_TOOLCHAIN_FILE=../arm-gcc-toolchain.cmake
+                    '''
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                script {
+                    echo 'Using shared library: buildFirmware()'
+                    buildFirmware(env.PROJECT_DIR, env.BUILD_DIR)
+                }
+            }
+        }
+        stage('Verify Artifacts') {
+            steps {
+                sh 'ls -lh ${PROJECT_DIR}/${BUILD_DIR} || true'
+            }
+        }
+        stage('Archive') {
+            steps {
+                archiveArtifacts artifacts: "${env.PROJECT_DIR}/${env.BUILD_DIR}/*.elf,${env.PROJECT_DIR}/${env.BUILD_DIR}/*.hex,${env.PROJECT_DIR}/${env.BUILD_DIR}/*.bin,${env.PROJECT_DIR}/${env.BUILD_DIR}/clang-format-report.txt", allowEmptyArchive: true
+            }
+        }
+    }
+    post {
+        always {
+            echo 'Post-build: archiving clang-format report and printing summary'
+            archiveArtifacts artifacts: "${env.PROJECT_DIR}/${env.BUILD_DIR}/clang-format-report.txt", allowEmptyArchive: true
+            sh 'echo "--- clang-format report (post) ---"; cat ${PROJECT_DIR}/${BUILD_DIR}/clang-format-report.txt || true'
+        }
+        success {
+            echo 'Build succeeded.'
+        }
+        failure {
+            echo 'Build failed.'
+        }
+    }
+}
