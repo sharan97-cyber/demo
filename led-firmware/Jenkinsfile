@@ -5,80 +5,51 @@ library identifier: 'shared_library@main', retriever: modernSCM(
 )
 
 pipeline {
-    agent {
-        label 'linux-agent'
-    }
-    
+    agent { label 'linux-agent' }
     options {
         timestamps()
-        timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
-    
     environment {
         BUILD_DIR = 'build'
         PROJECT_DIR = 'led-firmware'
     }
-    
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'echo "✅ Checkout completed successfully"'
             }
         }
-        
         stage('Prepare') {
             steps {
                 script {
-                    echo '========== Prepare Environment =========='
+                    echo 'Using shared library: prepareEnvironment()'
                     prepareEnvironment(env.PROJECT_DIR)
                 }
             }
         }
-        
         stage('Lint') {
             steps {
                 script {
-                    echo '========== Code Formatting Check =========='
+                    echo 'Using shared library: runClangFormat()'
                     runClangFormat(env.PROJECT_DIR, env.BUILD_DIR)
                 }
             }
         }
         
-        stage('Parallel Validation') {
+        stage('Parallel Build Validation') {
             parallel {
-                stage('Unit Tests') {
+                stage('Static Code Analysis') {
                     steps {
                         dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
                             sh '''
                             set -e
-                            mkdir -p "${BUILD_DIR}"
-                            echo "========== Running Unit Tests =========="
-                            if [ -f tests/led_test.c ] && [ -f src/led.c ]; then
-                                cc -std=c99 -Wall -Wextra -Iinclude tests/led_test.c src/led.c -o "${BUILD_DIR}/led_test"
-                                "${BUILD_DIR}/led_test"
-                                echo "✅ Unit Tests Passed"
-                            else
-                                echo "⚠️  Test files not found, skipping unit tests"
-                            fi
-                            '''
-                        }
-                    }
-                }
-                
-                stage('Static Analysis') {
-                    steps {
-                        dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
-                            sh '''
-                            set -e
-                            echo "========== Running Static Analysis =========="
+                            echo "========== Running Static Code Analysis =========="
                             mkdir -p "${BUILD_DIR}"
                             
                             if [ -f src/led.c ]; then
-                                echo "Analyzing src/led.c with strict compiler warnings..."
+                                echo "Analyzing source code with strict compiler warnings..."
                                 cc -std=c99 -Wall -Wextra -Wconversion -Wsign-conversion -Wunused -Iinclude -c src/led.c -o "${BUILD_DIR}/led.o" 2>&1 || true
-                                echo "✅ Static Analysis Complete"
+                                echo "========== Static Analysis Complete =========="
                             else
                                 echo "⚠️  Source files not found, skipping static analysis"
                             fi
@@ -86,83 +57,101 @@ pipeline {
                         }
                     }
                 }
+                
+                stage('Pre-Build Check') {
+                    steps {
+                        dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
+                            sh '''
+                            set -e
+                            echo "========== Running Pre-Build Checks =========="
+                            
+                            # Check for required files
+                            echo "Checking for required source files..."
+                            if [ -f CMakeLists.txt ]; then
+                                echo "✅ CMakeLists.txt found"
+                            else
+                                echo "⚠️  CMakeLists.txt not found"
+                            fi
+                            
+                            if [ -f src/led.c ]; then
+                                echo "✅ src/led.c found"
+                            else
+                                echo "⚠️  src/led.c not found"
+                            fi
+                            
+                            if [ -f arm-gcc-toolchain.cmake ]; then
+                                echo "✅ ARM GCC toolchain found"
+                            else
+                                echo "⚠️  ARM GCC toolchain not found"
+                            fi
+                            
+                            # Check compiler versions
+                            echo ""
+                            echo "Compiler information:"
+                            gcc --version | head -1
+                            cmake --version | head -1
+                            
+                            echo "========== Pre-Build Checks Complete =========="
+                            '''
+                        }
+                    }
+                }
             }
         }
         
+        stage('Unit Tests') {
+            steps {
+                dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
+                    sh '''
+                    set -e
+                    mkdir -p "${BUILD_DIR}"
+                    echo "========== Running Unit Tests =========="
+                    cc -std=c99 -Wall -Wextra -Iinclude tests/led_test.c src/led.c -o "${BUILD_DIR}/led_test"
+                    "${BUILD_DIR}/led_test"
+                    echo "========== Unit Tests Passed =========="
+                    '''
+                }
+            }
+        }
         stage('Configure') {
             steps {
                 dir("${env.WORKSPACE}/${env.PROJECT_DIR}") {
                     sh '''
                     set -e
-                    echo "========== CMake Configuration =========="
                     mkdir -p "${BUILD_DIR}"
                     cd "${BUILD_DIR}"
-                    if [ -f ../CMakeLists.txt ]; then
-                        if [ -f ../arm-gcc-toolchain.cmake ]; then
-                            echo "Using ARM GCC toolchain..."
-                            cmake .. -DCMAKE_TOOLCHAIN_FILE=../arm-gcc-toolchain.cmake
-                        else
-                            echo "Using default toolchain..."
-                            cmake ..
-                        fi
-                        echo "✅ CMake Configuration Complete"
-                    else
-                        echo "⚠️  CMakeLists.txt not found, skipping configure"
-                    fi
+                    cmake .. -DCMAKE_TOOLCHAIN_FILE=../arm-gcc-toolchain.cmake
                     '''
                 }
             }
         }
-        
         stage('Build') {
             steps {
                 script {
-                    echo '========== Building Firmware =========='
+                    echo 'Using shared library: buildFirmware()'
                     buildFirmware(env.PROJECT_DIR, env.BUILD_DIR)
                 }
             }
         }
-        
         stage('Verify Artifacts') {
             steps {
-                sh '''
-                echo "========== Verifying Build Artifacts =========="
-                if [ -d ${PROJECT_DIR}/${BUILD_DIR} ]; then
-                    ls -lh ${PROJECT_DIR}/${BUILD_DIR}
-                    echo "✅ Build artifacts verified"
-                else
-                    echo "⚠️  Build directory not found"
-                fi
-                '''
+                sh 'ls -lh ${PROJECT_DIR}/${BUILD_DIR} || true'
+            }
+        }
+        stage('Archive') {
+            steps {
+                archiveArtifacts artifacts: "${env.PROJECT_DIR}/${env.BUILD_DIR}/*.elf,${env.PROJECT_DIR}/${env.BUILD_DIR}/*.hex,${env.PROJECT_DIR}/${env.BUILD_DIR}/*.bin,${env.PROJECT_DIR}/${env.BUILD_DIR}/clang-format-report.txt", allowEmptyArchive: true
             }
         }
     }
-    
     post {
         always {
             node('linux-agent') {
                 script {
-                    echo '========== Post-Build: Archiving Artifacts =========='
+                    echo 'Post-build: archiving clang-format report and printing summary'
                     try {
-                        // Archive clang-format report
-                        archiveArtifacts artifacts: "${env.PROJECT_DIR}/${env.BUILD_DIR}/clang-format-report.txt", 
-                                       allowEmptyArchive: true
-                        
-                        // Archive firmware artifacts
-                        archiveArtifacts artifacts: "${env.PROJECT_DIR}/${env.BUILD_DIR}/*.elf,${env.PROJECT_DIR}/${env.BUILD_DIR}/*.hex,${env.PROJECT_DIR}/${env.BUILD_DIR}/*.bin", 
-                                       allowEmptyArchive: true
-                        
-                        // Print clang-format report if exists
-                        sh '''
-                        if [ -f ${PROJECT_DIR}/${BUILD_DIR}/clang-format-report.txt ]; then
-                            echo "--- Clang Format Report ---"
-                            cat ${PROJECT_DIR}/${BUILD_DIR}/clang-format-report.txt
-                        else
-                            echo "No clang-format report generated"
-                        fi
-                        '''
-                        
-                        echo '========== Post-Build: Archive Complete =========='
+                        archiveArtifacts artifacts: "${env.PROJECT_DIR}/${env.BUILD_DIR}/clang-format-report.txt", allowEmptyArchive: true
+                        sh 'echo "--- clang-format report (post) ---"; cat ${PROJECT_DIR}/${BUILD_DIR}/clang-format-report.txt || true'
                     } catch (Exception e) {
                         echo "⚠️  Post-build archiving failed: ${e.message}"
                     }
@@ -170,13 +159,10 @@ pipeline {
             }
         }
         success {
-            echo '✅ BUILD SUCCEEDED - All stages completed successfully'
+            echo 'Build succeeded.'
         }
         failure {
-            echo '❌ BUILD FAILED - Check console output above for details'
-        }
-        unstable {
-            echo '⚠️  BUILD UNSTABLE - Some warnings detected'
+            echo 'Build failed.'
         }
     }
 }
