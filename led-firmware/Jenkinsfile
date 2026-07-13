@@ -20,6 +20,9 @@ pipeline {
     
     stages {
         stage('Checkout') {
+            options {
+                retry(2)  // ✅ Retry this stage if it fails
+            }
             steps {
                 checkout scm
                 sh 'echo "✅ Checkout completed successfully"'
