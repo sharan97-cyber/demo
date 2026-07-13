@@ -5,7 +5,9 @@ library identifier: 'shared_library@main', retriever: modernSCM(
 )
 
 pipeline {
-    agent { label 'linux-agent' }
+    agent {
+        label 'linux-agent'
+    }
     
     options {
         timestamps()
@@ -20,9 +22,6 @@ pipeline {
     
     stages {
         stage('Checkout') {
-            options {
-                retry(2)  // ✅ Retry this stage if it fails
-            }
             steps {
                 checkout scm
                 sh 'echo "✅ Checkout completed successfully"'
